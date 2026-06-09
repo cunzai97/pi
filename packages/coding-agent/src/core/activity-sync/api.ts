@@ -1,37 +1,14 @@
 import type { Buffer } from "node:buffer";
 import {
-	PI_DEV_ACTIVITY_SYNC_SCOPE,
-	PI_DEV_DEFAULT_BASE_URL,
-	PI_DEV_OAUTH_CLIENT_ID,
-	PI_DEV_OFFLINE_ACCESS_SCOPE,
-} from "../pi-dev/config.ts";
-import {
 	getPiDevApiUrl,
 	getPiDevFetch,
 	isRecord,
-	PiDevApiError,
 	type PiDevApiOptions,
-	type PiDevFetch,
 	readJson,
 	requireNumber,
 	requireString,
 	throwIfPiDevNotOk,
 } from "../pi-dev/http.ts";
-import {
-	type PiDevDeviceFlowResponse,
-	type PiDevTokenResponse,
-	pollPiDevDeviceToken,
-	refreshPiDevAccessToken,
-	startPiDevDeviceFlow,
-} from "../pi-dev/oauth.ts";
-
-export const ACTIVITY_SYNC_CLIENT_ID = PI_DEV_OAUTH_CLIENT_ID;
-export const ACTIVITY_SYNC_SCOPE = `${PI_DEV_ACTIVITY_SYNC_SCOPE} ${PI_DEV_OFFLINE_ACCESS_SCOPE}`;
-export const DEFAULT_PI_DEV_URL = PI_DEV_DEFAULT_BASE_URL;
-
-export type ActivitySyncDeviceFlowResponse = PiDevDeviceFlowResponse;
-export type ActivitySyncTokenResponse = PiDevTokenResponse;
-
 export interface ActivitySyncWatermarkResponse {
 	ok: true;
 	watermark: string | null;
@@ -44,9 +21,7 @@ export interface ActivitySyncUploadResponse {
 	watermark: string;
 }
 
-export type ActivitySyncFetch = PiDevFetch;
-
-export interface ActivitySyncApiOptions extends PiDevApiOptions {}
+export type ActivitySyncApiOptions = PiDevApiOptions;
 
 export interface UploadSessionAnalyticsOptions extends ActivitySyncApiOptions {
 	accessToken: string;
@@ -55,13 +30,6 @@ export interface UploadSessionAnalyticsOptions extends ActivitySyncApiOptions {
 	idempotencyKey: string;
 	body: Buffer;
 	contentEncoding: "zstd";
-}
-
-export class ActivitySyncApiError extends PiDevApiError {
-	constructor(status: number, errorCode: string | undefined, description: string | undefined, operation?: string) {
-		super(status, errorCode, description, operation);
-		this.name = "ActivitySyncApiError";
-	}
 }
 
 function parseWatermarkResponse(json: unknown): ActivitySyncWatermarkResponse {
@@ -83,38 +51,6 @@ function parseUploadResponse(json: unknown): ActivitySyncUploadResponse {
 	};
 }
 
-export async function startActivitySyncDeviceFlow(
-	deviceId: string,
-	options: ActivitySyncApiOptions = {},
-): Promise<ActivitySyncDeviceFlowResponse> {
-	return startPiDevDeviceFlow({
-		...options,
-		deviceId,
-		scopes: [PI_DEV_ACTIVITY_SYNC_SCOPE],
-		errorClass: ActivitySyncApiError,
-	});
-}
-
-export async function pollActivitySyncDeviceToken(
-	deviceCode: string,
-	options: ActivitySyncApiOptions = {},
-): Promise<ActivitySyncTokenResponse> {
-	return pollPiDevDeviceToken(deviceCode, {
-		...options,
-		errorClass: ActivitySyncApiError,
-	});
-}
-
-export async function refreshActivitySyncAccessToken(
-	refreshToken: string,
-	options: ActivitySyncApiOptions = {},
-): Promise<ActivitySyncTokenResponse> {
-	return refreshPiDevAccessToken(refreshToken, {
-		...options,
-		errorClass: ActivitySyncApiError,
-	});
-}
-
 export async function getActivitySyncWatermark(
 	accessToken: string,
 	deviceId: string,
@@ -123,7 +59,7 @@ export async function getActivitySyncWatermark(
 	const response = await getPiDevFetch(options.fetch)(getPiDevApiUrl(`/analytics/activity/${deviceId}`), {
 		headers: { Authorization: `Bearer ${accessToken}` },
 	});
-	await throwIfPiDevNotOk(response, "GET /analytics/activity/:deviceId", ActivitySyncApiError);
+	await throwIfPiDevNotOk(response, "GET /analytics/activity/:deviceId");
 	return parseWatermarkResponse(await readJson(response));
 }
 
@@ -141,6 +77,6 @@ export async function uploadSessionAnalytics(
 		},
 		body: options.body,
 	});
-	await throwIfPiDevNotOk(response, "POST /analytics/activity/:deviceId", ActivitySyncApiError);
+	await throwIfPiDevNotOk(response, "POST /analytics/activity/:deviceId");
 	return parseUploadResponse(await readJson(response));
 }

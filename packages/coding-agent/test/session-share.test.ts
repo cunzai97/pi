@@ -3,16 +3,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AuthStorage } from "../src/core/auth-storage.ts";
+import { getPiDevBaseUrl, PI_DEV_SESSION_SHARE_SCOPE } from "../src/core/pi-dev/config.ts";
+import { getPiDevAuth } from "../src/core/pi-dev/oauth.ts";
 import {
 	formatPiDevShareSuccess,
-	getPiDevAuth,
-	getPiDevBaseUrl,
 	getPiDevShareAuth,
 	loginPiDevShare,
-	PI_DEV_SESSION_SHARE_SCOPE,
 	parseShareCommand,
 	uploadPiDevSessionShare,
-} from "../src/core/pi-dev/index.ts";
+} from "../src/core/pi-dev/session-share.ts";
 
 const tempDirs: string[] = [];
 
@@ -197,7 +196,7 @@ describe("session share client", () => {
 			accessToken: "piga_share",
 			bytes,
 			byteSize: bytes.byteLength,
-			fetchFn,
+			fetch: fetchFn,
 		});
 
 		expect(result).toEqual({ id: "psh_123", url: "https://pi.dev/session/#pi/psh_123" });

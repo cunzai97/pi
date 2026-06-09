@@ -32,7 +32,7 @@ export interface PiDevShareUploadOptions {
 	bytes: Uint8Array;
 	byteSize: number;
 	signal?: AbortSignal;
-	fetchFn?: PiDevFetch;
+	fetch?: PiDevFetch;
 }
 
 export function parseShareCommand(text: string): ShareCommandParseResult {
@@ -70,7 +70,7 @@ export async function getPiDevShareAuth(authStorage: AuthStorage): Promise<PiDev
 }
 
 export async function uploadPiDevSessionShare(options: PiDevShareUploadOptions): Promise<PiDevShareUploadResult> {
-	const response = await getPiDevFetch(options.fetchFn)(getPiDevApiUrl("/api/session-shares"), {
+	const response = await getPiDevFetch(options.fetch)(getPiDevApiUrl("/api/session-shares"), {
 		method: "POST",
 		headers: {
 			Authorization: `Bearer ${options.accessToken}`,

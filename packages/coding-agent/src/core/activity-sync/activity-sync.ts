@@ -1,14 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { AuthStorage } from "../auth-storage.ts";
-import { getPiDevAuth, PI_DEV_ACTIVITY_SYNC_SCOPE } from "../pi-dev/index.ts";
+import { PI_DEV_ACTIVITY_SYNC_SCOPE } from "../pi-dev/config.ts";
+import { PiDevApiError, type PiDevFetch } from "../pi-dev/http.ts";
+import { getPiDevAuth } from "../pi-dev/oauth.ts";
 import { SettingsManager } from "../settings-manager.ts";
-import {
-	ActivitySyncApiError,
-	type ActivitySyncFetch,
-	getActivitySyncWatermark,
-	uploadSessionAnalytics,
-} from "./api.ts";
+import { getActivitySyncWatermark, uploadSessionAnalytics } from "./api.ts";
 import { type ActivitySyncPayload, buildActivitySyncPayloads } from "./payload.ts";
 import { buildSessionAnalyticsUpload } from "./session-analytics-reader.ts";
 import {
@@ -39,7 +36,7 @@ export interface SyncSessionAnalyticsOptions {
 	sessionsRoot?: string;
 	settingsManager?: SettingsManager;
 	authStorage?: AuthStorage;
-	fetch?: ActivitySyncFetch;
+	fetch?: PiDevFetch;
 	signal?: AbortSignal;
 	now?: Date;
 }
@@ -66,6 +63,22 @@ async function getActivitySyncAccessToken(
 	return auth.available ? auth.accessToken : undefined;
 }
 
+async function runWithRefreshRetry<T>(
+	authStorage: AuthStorage,
+	accessToken: string,
+	options: SyncSessionAnalyticsOptions,
+	request: (accessToken: string) => Promise<T>,
+): Promise<{ value: T; accessToken: string }> {
+	try {
+		return { value: await request(accessToken), accessToken };
+	} catch (error) {
+		if (!(error instanceof PiDevApiError) || error.status !== 401) throw error;
+		const refreshedAccessToken = await getActivitySyncAccessToken(authStorage, options, true);
+		if (!refreshedAccessToken) throw error;
+		return { value: await request(refreshedAccessToken), accessToken: refreshedAccessToken };
+	}
+}
+
 async function uploadWithRefreshRetry(
 	authStorage: AuthStorage,
 	accessToken: string,
@@ -73,32 +86,18 @@ async function uploadWithRefreshRetry(
 	metadata: { deviceId: string; idempotencyKey: string },
 	options: SyncSessionAnalyticsOptions,
 ): Promise<{ watermark: string; accessToken: string }> {
-	try {
-		const response = await uploadSessionAnalytics({
+	const uploaded = await runWithRefreshRetry(authStorage, accessToken, options, (token) =>
+		uploadSessionAnalytics({
 			fetch: options.fetch,
-			accessToken,
+			accessToken: token,
 			deviceId: metadata.deviceId,
 			watermark: payload.watermark,
 			idempotencyKey: metadata.idempotencyKey,
 			body: payload.body,
 			contentEncoding: payload.contentEncoding,
-		});
-		return { watermark: response.watermark, accessToken };
-	} catch (error) {
-		if (!(error instanceof ActivitySyncApiError) || error.status !== 401) throw error;
-		const refreshedAccessToken = await getActivitySyncAccessToken(authStorage, options, true);
-		if (!refreshedAccessToken) throw error;
-		const response = await uploadSessionAnalytics({
-			fetch: options.fetch,
-			accessToken: refreshedAccessToken,
-			deviceId: metadata.deviceId,
-			watermark: payload.watermark,
-			idempotencyKey: metadata.idempotencyKey,
-			body: payload.body,
-			contentEncoding: payload.contentEncoding,
-		});
-		return { watermark: response.watermark, accessToken: refreshedAccessToken };
-	}
+		}),
+	);
+	return { watermark: uploaded.value.watermark, accessToken: uploaded.accessToken };
 }
 
 async function getWatermarkWithRefreshRetry(
@@ -107,20 +106,10 @@ async function getWatermarkWithRefreshRetry(
 	deviceId: string,
 	options: SyncSessionAnalyticsOptions,
 ): Promise<{ watermark: string | null; accessToken: string }> {
-	try {
-		const response = await getActivitySyncWatermark(accessToken, deviceId, {
-			fetch: options.fetch,
-		});
-		return { watermark: response.watermark, accessToken };
-	} catch (error) {
-		if (!(error instanceof ActivitySyncApiError) || error.status !== 401) throw error;
-		const refreshedAccessToken = await getActivitySyncAccessToken(authStorage, options, true);
-		if (!refreshedAccessToken) throw error;
-		const response = await getActivitySyncWatermark(refreshedAccessToken, deviceId, {
-			fetch: options.fetch,
-		});
-		return { watermark: response.watermark, accessToken: refreshedAccessToken };
-	}
+	const response = await runWithRefreshRetry(authStorage, accessToken, options, (token) =>
+		getActivitySyncWatermark(token, deviceId, { fetch: options.fetch }),
+	);
+	return { watermark: response.value.watermark, accessToken: response.accessToken };
 }
 
 async function syncSessionAnalyticsUnlocked(options: SyncSessionAnalyticsOptions): Promise<ActivitySyncResult> {
@@ -148,7 +137,6 @@ async function syncSessionAnalyticsUnlocked(options: SyncSessionAnalyticsOptions
 		});
 
 		if (upload.records.length === 0) {
-			await saveActivitySyncState(state, options.agentDir);
 			return {
 				status: "no_changes",
 				filesScanned: upload.filesScanned,
@@ -180,9 +168,10 @@ async function syncSessionAnalyticsUnlocked(options: SyncSessionAnalyticsOptions
 			recordsSent += payload.recordCount;
 			compressedBytes += payload.compressedBytes;
 			decompressedBytes += payload.decompressedBytes;
-			state.lastSuccessAt = (options.now ?? new Date()).toISOString();
-			await saveActivitySyncState(state, options.agentDir);
 		}
+
+		state.lastSuccessAt = (options.now ?? new Date()).toISOString();
+		await saveActivitySyncState(state, options.agentDir);
 
 		return {
 			status: "uploaded",

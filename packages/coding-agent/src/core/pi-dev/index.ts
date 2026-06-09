@@ -1,63 +1,25 @@
+/**
+ * Public pi.dev entrypoints used by the agent runtime.
+ *
+ * Keep low-level HTTP/OAuth implementation helpers in their leaf modules so this
+ * barrel does not accidentally turn internal pi.dev plumbing into public API.
+ */
+
 export {
-	formatPiDevScopes,
-	getPiDevBaseUrl,
-	normalizePiDevBaseUrl,
-	PI_DEV_ACTIVITY_SYNC_SCOPE,
-	PI_DEV_DEFAULT_BASE_URL,
-	PI_DEV_OAUTH_CLIENT_ID,
-	PI_DEV_OAUTH_PROVIDER_ID,
-	PI_DEV_OFFLINE_ACCESS_SCOPE,
 	PI_DEV_PROFILE_CONNECTED_STATUS,
 	PI_DEV_PROFILE_SCOPES,
 	PI_DEV_SESSION_SHARE_SCOPE,
 	PI_DEV_SETUP_PROFILE_CONNECTED_STATUS,
-	scopesFromString,
-	withPiDevOfflineAccess,
 } from "./config.ts";
 export {
-	createFormBody,
-	getPiDevApiUrl,
-	getPiDevFetch,
-	isRecord,
-	numberField,
-	PiDevApiError,
-	type PiDevApiErrorCtor,
-	type PiDevApiOptions,
-	type PiDevFetch,
-	readJson,
-	readJsonObject,
-	requireNumber,
-	requireString,
-	stringField,
-	throwIfPiDevNotOk,
-} from "./http.ts";
-export {
 	getPiDevAuth,
-	hasPiDevScopes,
-	introspectPiDevAccessToken,
 	loginPiDev,
-	type PiDevAccessIntrospectionResult,
-	type PiDevAuthOptions,
 	type PiDevAuthResult,
 	type PiDevDeviceCodeInfo,
-	type PiDevDeviceFlowOptions,
-	type PiDevDeviceFlowResponse,
-	type PiDevDeviceTokenOptions,
 	type PiDevLoginOptions,
-	type PiDevRefreshTokenOptions,
-	type PiDevTokenResponse,
-	pollPiDevDeviceToken,
-	refreshPiDevAccessToken,
-	startPiDevDeviceFlow,
 } from "./oauth.ts";
 export {
 	formatPiDevShareSuccess,
-	formatPiDevShareUploadError,
-	getPiDevShareAuth,
-	loginPiDevShare,
-	type PiDevShareAuthResult,
-	type PiDevShareDeviceAuthInfo,
-	type PiDevShareDeviceAuthOptions,
 	type PiDevShareUploadOptions,
 	type PiDevShareUploadResult,
 	parseShareCommand,
