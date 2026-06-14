@@ -560,6 +560,49 @@ describe("Agent", () => {
 		await firstPrompt.catch(() => {});
 	});
 
+	it("continue() should reserve the active run while awaiting async LLM conversion", async () => {
+		const convertStarted = createDeferred();
+		const releaseConvert = createDeferred();
+		let convertCallCount = 0;
+		const agent = new Agent({
+			convertToLlm: async (messages) => {
+				convertCallCount++;
+				if (convertCallCount === 1) {
+					convertStarted.resolve();
+					await releaseConvert.promise;
+				}
+				return messages.filter(
+					(message) => message.role === "user" || message.role === "assistant" || message.role === "toolResult",
+				) as Message[];
+			},
+			streamFn: () => {
+				const stream = new MockAssistantStream();
+				queueMicrotask(() => {
+					stream.push({ type: "done", reason: "stop", message: createAssistantMessage("Processed") });
+				});
+				return stream;
+			},
+		});
+		agent.state.messages = [
+			{
+				role: "user",
+				content: [{ type: "text", text: "Initial" }],
+				timestamp: Date.now(),
+			},
+		];
+
+		const continuePromise = agent.continue();
+		await convertStarted.promise;
+
+		expect(agent.state.isStreaming).toBe(true);
+		await expect(agent.prompt("Second message")).rejects.toThrow("Agent is already processing a prompt");
+
+		releaseConvert.resolve();
+		await continuePromise;
+
+		expect(convertCallCount).toBe(2);
+	});
+
 	it("continue() should process queued follow-up messages after an assistant turn", async () => {
 		const agent = new Agent({
 			streamFn: () => {

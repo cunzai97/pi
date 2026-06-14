@@ -336,33 +336,42 @@ export class Agent {
 
 	/** Continue from the current transcript. The last LLM-context message must be a user or tool-result message. */
 	async continue(): Promise<void> {
-		if (this.activeRun) {
-			throw new Error("Agent is already processing. Wait for completion before continuing.");
-		}
+		const activeRun = this.reserveRun("Agent is already processing. Wait for completion before continuing.");
+		let executor: ((signal: AbortSignal) => Promise<void>) | undefined;
 
-		const llmMessages = await this.convertToLlm(this._state.messages);
-		const lastMessage = llmMessages[llmMessages.length - 1];
-		if (!lastMessage) {
-			throw new Error("No messages to continue from");
-		}
-
-		if (lastMessage.role === "assistant") {
-			const queuedSteering = this.steeringQueue.drain();
-			if (queuedSteering.length > 0) {
-				await this.runPromptMessages(queuedSteering, { skipInitialSteeringPoll: true });
-				return;
+		try {
+			const llmMessages = await this.convertToLlm(this._state.messages);
+			const lastMessage = llmMessages[llmMessages.length - 1];
+			if (!lastMessage) {
+				throw new Error("No messages to continue from");
 			}
 
-			const queuedFollowUps = this.followUpQueue.drain();
-			if (queuedFollowUps.length > 0) {
-				await this.runPromptMessages(queuedFollowUps);
-				return;
+			if (lastMessage.role === "assistant") {
+				const queuedSteering = this.steeringQueue.drain();
+				if (queuedSteering.length > 0) {
+					executor = (signal) =>
+						this.executePromptMessages(queuedSteering, { skipInitialSteeringPoll: true }, signal);
+				} else {
+					const queuedFollowUps = this.followUpQueue.drain();
+					if (queuedFollowUps.length > 0) {
+						executor = (signal) => this.executePromptMessages(queuedFollowUps, {}, signal);
+					} else {
+						throw new Error("Cannot continue from message role: assistant");
+					}
+				}
+			} else {
+				executor = (signal) => this.executeContinuation(signal);
 			}
-
-			throw new Error("Cannot continue from message role: assistant");
+		} catch (error) {
+			this.finishRun();
+			throw error;
 		}
 
-		await this.runContinuation();
+		if (!executor) {
+			this.finishRun();
+			throw new Error("No continuation executor prepared");
+		}
+		await this.runWithLifecycle(executor, activeRun);
 	}
 
 	private normalizePromptInput(
@@ -388,28 +397,32 @@ export class Agent {
 		messages: AgentMessage[],
 		options: { skipInitialSteeringPoll?: boolean } = {},
 	): Promise<void> {
-		await this.runWithLifecycle(async (signal) => {
-			await runAgentLoop(
-				messages,
-				this.createContextSnapshot(),
-				this.createLoopConfig(options),
-				(event) => this.processEvents(event),
-				signal,
-				this.streamFn,
-			);
-		});
+		await this.runWithLifecycle((signal) => this.executePromptMessages(messages, options, signal));
 	}
 
-	private async runContinuation(): Promise<void> {
-		await this.runWithLifecycle(async (signal) => {
-			await runAgentLoopContinue(
-				this.createContextSnapshot(),
-				this.createLoopConfig(),
-				(event) => this.processEvents(event),
-				signal,
-				this.streamFn,
-			);
-		});
+	private async executePromptMessages(
+		messages: AgentMessage[],
+		options: { skipInitialSteeringPoll?: boolean },
+		signal: AbortSignal,
+	): Promise<void> {
+		await runAgentLoop(
+			messages,
+			this.createContextSnapshot(),
+			this.createLoopConfig(options),
+			(event) => this.processEvents(event),
+			signal,
+			this.streamFn,
+		);
+	}
+
+	private async executeContinuation(signal: AbortSignal): Promise<void> {
+		await runAgentLoopContinue(
+			this.createContextSnapshot(),
+			this.createLoopConfig(),
+			(event) => this.processEvents(event),
+			signal,
+			this.streamFn,
+		);
 	}
 
 	private createContextSnapshot(): AgentContext {
@@ -449,9 +462,9 @@ export class Agent {
 		};
 	}
 
-	private async runWithLifecycle(executor: (signal: AbortSignal) => Promise<void>): Promise<void> {
+	private reserveRun(errorMessage: string): ActiveRun {
 		if (this.activeRun) {
-			throw new Error("Agent is already processing.");
+			throw new Error(errorMessage);
 		}
 
 		const abortController = new AbortController();
@@ -459,16 +472,29 @@ export class Agent {
 		const promise = new Promise<void>((resolve) => {
 			resolvePromise = resolve;
 		});
-		this.activeRun = { promise, resolve: resolvePromise, abortController };
+		const activeRun = { promise, resolve: resolvePromise, abortController };
+		this.activeRun = activeRun;
 
 		this._state.isStreaming = true;
 		this._state.streamingMessage = undefined;
 		this._state.errorMessage = undefined;
 
+		return activeRun;
+	}
+
+	private async runWithLifecycle(
+		executor: (signal: AbortSignal) => Promise<void>,
+		activeRun?: ActiveRun,
+	): Promise<void> {
+		const run = activeRun ?? this.reserveRun("Agent is already processing.");
+		if (this.activeRun !== run) {
+			throw new Error("Agent run reservation was lost.");
+		}
+
 		try {
-			await executor(abortController.signal);
+			await executor(run.abortController.signal);
 		} catch (error) {
-			await this.handleRunFailure(error, abortController.signal.aborted);
+			await this.handleRunFailure(error, run.abortController.signal.aborted);
 		} finally {
 			this.finishRun();
 		}

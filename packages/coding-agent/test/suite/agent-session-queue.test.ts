@@ -350,6 +350,44 @@ describe("AgentSession queue characterization", () => {
 		expect(harness.getPendingResponseCount()).toBe(1);
 	});
 
+	it("persists excluded custom messages from message_end hooks after the triggering message", async () => {
+		const harness = await createHarness({
+			extensionFactories: [
+				(pi) => {
+					pi.on("message_end", (event) => {
+						if (event.message.role !== "assistant") return;
+						pi.sendMessage({
+							customType: "status",
+							content: "display only",
+							display: true,
+							details: {},
+							excludeFromContext: true,
+						});
+					});
+				},
+			],
+		});
+		harnesses.push(harness);
+		harness.setResponses([fauxAssistantMessage("reply")]);
+
+		await harness.session.prompt("hello");
+
+		const stateOrder = harness.session.messages.map((message) =>
+			message.role === "custom" ? `custom:${message.customType}` : message.role,
+		);
+		const branchOrder = harness.sessionManager.getBranch().map((entry) => {
+			if (entry.type === "message") {
+				return entry.message.role;
+			}
+			if (entry.type === "custom_message") {
+				return `custom:${entry.customType}`;
+			}
+			return entry.type;
+		});
+		expect(stateOrder).toEqual(["user", "assistant", "custom:status"]);
+		expect(branchOrder).toEqual(["user", "assistant", "custom:status"]);
+	});
+
 	it("queues custom messages with deliverAs steer while streaming", async () => {
 		const waiting = await createWaitingHarness();
 		const { harness, waitForToolStart, promptPromise, releaseToolExecution } = waiting;

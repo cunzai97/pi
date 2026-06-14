@@ -263,6 +263,7 @@ export class AgentSession {
 	// Event subscription state
 	private _unsubscribeAgent?: () => void;
 	private _eventListeners: AgentSessionEventListener[] = [];
+	private _deferredCustomMessagePersistenceStack: CustomMessage[][] = [];
 
 	/** Tracks pending steering messages for UI display. Removed when delivered. */
 	private _steeringMessages: string[] = [];
@@ -496,53 +497,59 @@ export class AgentSession {
 			}
 		}
 
-		// Emit to extensions first
-		await this._emitExtensionEvent(event);
+		const deferredCustomMessages: CustomMessage[] | undefined = event.type === "message_end" ? [] : undefined;
+		if (deferredCustomMessages) {
+			this._deferredCustomMessagePersistenceStack.push(deferredCustomMessages);
+		}
 
-		// Notify all listeners
-		this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
+		try {
+			// Emit to extensions first
+			await this._emitExtensionEvent(event);
 
-		// Handle session persistence
-		if (event.type === "message_end") {
-			// Check if this is a custom message from extensions
-			if (event.message.role === "custom") {
-				// Persist as CustomMessageEntry
-				this.sessionManager.appendCustomMessageEntry(
-					event.message.customType,
-					event.message.content,
-					event.message.display,
-					event.message.details,
-					event.message.excludeFromContext,
-				);
-			} else if (
-				event.message.role === "user" ||
-				event.message.role === "assistant" ||
-				event.message.role === "toolResult"
-			) {
-				// Regular LLM message - persist as SessionMessageEntry
-				this.sessionManager.appendMessage(event.message);
+			// Notify all listeners
+			this._emit(event.type === "agent_end" ? { ...event, willRetry: this._willRetryAfterAgentEnd(event) } : event);
+
+			// Handle session persistence
+			if (event.type === "message_end") {
+				// Check if this is a custom message from extensions
+				if (event.message.role === "custom") {
+					// Persist as CustomMessageEntry
+					this._persistCustomMessage(event.message);
+				} else if (
+					event.message.role === "user" ||
+					event.message.role === "assistant" ||
+					event.message.role === "toolResult"
+				) {
+					// Regular LLM message - persist as SessionMessageEntry
+					this.sessionManager.appendMessage(event.message);
+				}
+				// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
+				this._persistDeferredCustomMessages(deferredCustomMessages ?? []);
+
+				// Track assistant message for auto-compaction (checked on agent_end)
+				if (event.message.role === "assistant") {
+					this._lastAssistantMessage = event.message;
+
+					const assistantMsg = event.message as AssistantMessage;
+					if (assistantMsg.stopReason !== "error") {
+						this._overflowRecoveryAttempted = false;
+					}
+
+					// Reset retry counter immediately on successful assistant response
+					// This prevents accumulation across multiple LLM calls within a turn
+					if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
+						this._emit({
+							type: "auto_retry_end",
+							success: true,
+							attempt: this._retryAttempt,
+						});
+						this._retryAttempt = 0;
+					}
+				}
 			}
-			// Other message types (bashExecution, compactionSummary, branchSummary) are persisted elsewhere
-
-			// Track assistant message for auto-compaction (checked on agent_end)
-			if (event.message.role === "assistant") {
-				this._lastAssistantMessage = event.message;
-
-				const assistantMsg = event.message as AssistantMessage;
-				if (assistantMsg.stopReason !== "error") {
-					this._overflowRecoveryAttempted = false;
-				}
-
-				// Reset retry counter immediately on successful assistant response
-				// This prevents accumulation across multiple LLM calls within a turn
-				if (assistantMsg.stopReason !== "error" && this._retryAttempt > 0) {
-					this._emit({
-						type: "auto_retry_end",
-						success: true,
-						attempt: this._retryAttempt,
-					});
-					this._retryAttempt = 0;
-				}
+		} finally {
+			if (deferredCustomMessages) {
+				this._deferredCustomMessagePersistenceStack.pop();
 			}
 		}
 	};
@@ -1350,8 +1357,7 @@ export class AgentSession {
 		}
 	}
 
-	private _recordCustomMessage(message: CustomMessage): void {
-		this.agent.state.messages.push(message);
+	private _persistCustomMessage(message: CustomMessage): void {
 		this.sessionManager.appendCustomMessageEntry(
 			message.customType,
 			message.content,
@@ -1359,6 +1365,23 @@ export class AgentSession {
 			message.details,
 			message.excludeFromContext,
 		);
+	}
+
+	private _persistDeferredCustomMessages(messages: CustomMessage[]): void {
+		for (const message of messages) {
+			this._persistCustomMessage(message);
+		}
+	}
+
+	private _recordCustomMessage(message: CustomMessage): void {
+		this.agent.state.messages.push(message);
+		const deferredMessages =
+			this._deferredCustomMessagePersistenceStack[this._deferredCustomMessagePersistenceStack.length - 1];
+		if (deferredMessages) {
+			deferredMessages.push(message);
+		} else {
+			this._persistCustomMessage(message);
+		}
 		this._emit({ type: "message_start", message });
 		this._emit({ type: "message_end", message });
 	}
