@@ -26,6 +26,7 @@ export function restoreLineEndings(text: string, ending: "\r\n" | "\n"): string 
 /**
  * Normalize text for fuzzy matching. Applies progressive transformations:
  * - Strip trailing whitespace from each line
+ * - Normalize tabs to 4 spaces (handles tab vs space indentation mismatch)
  * - Normalize smart quotes to ASCII equivalents
  * - Normalize Unicode dashes/hyphens to ASCII hyphen
  * - Normalize special Unicode spaces to regular space
@@ -37,6 +38,8 @@ export function normalizeForFuzzyMatch(text: string): string {
 			// Strip trailing whitespace per line
 			.split("\n")
 			.map((line) => line.trimEnd())
+			// Normalize tabs to 4 spaces for fuzzy matching (handles tab vs space indentation mismatch)
+			.map((line) => line.replace(/\t/g, "    "))
 			.join("\n")
 			// Smart single quotes → '
 			.replace(/[\u2018\u2019\u201A\u201B]/g, "'")
