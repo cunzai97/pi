@@ -44,7 +44,7 @@ type RenderSessionContextThis = {
 	};
 	sessionManager: { getCwd(): string };
 	session: { retryAttempt: number };
-	toolOutputExpanded: boolean;
+	thinkingExpanded: boolean;
 	isInitialized: boolean;
 	updateEditorBorderColor(): void;
 	getRegisteredToolDefinition(toolName: string): undefined;
@@ -73,7 +73,7 @@ function createFakeInteractiveModeThis(): RenderSessionContextThis {
 		},
 		sessionManager: { getCwd: () => process.cwd() },
 		session: { retryAttempt: 0 },
-		toolOutputExpanded: false,
+		thinkingExpanded: false,
 		isInitialized: true,
 		updateEditorBorderColor: vi.fn(),
 		getRegisteredToolDefinition: (_toolName: string) => undefined,

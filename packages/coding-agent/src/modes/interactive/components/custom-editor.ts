@@ -1,11 +1,50 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { Editor, type EditorOptions, type EditorTheme, type TUI } from "@earendil-works/pi-tui";
 import type { AppKeybinding, KeybindingsManager } from "../../../core/keybindings.ts";
+
+const MAX_HISTORY_SIZE = 500;
+
+function loadHistoryFromFile(historyFile: string): string[] {
+	try {
+		const content = fs.readFileSync(historyFile, "utf-8");
+		const lines = content
+			.split("\n")
+			.map((l) => l.trim())
+			.filter(Boolean);
+		// File stores oldest first; editor expects newest first
+		return lines.reverse().slice(0, MAX_HISTORY_SIZE);
+	} catch {
+		return [];
+	}
+}
+
+function appendHistoryToFile(historyFile: string, text: string): void {
+	try {
+		const dir = path.dirname(historyFile);
+		if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+		fs.appendFileSync(historyFile, text + "\n", "utf-8");
+		// Trim file if it grows too large
+		try {
+			const content = fs.readFileSync(historyFile, "utf-8");
+			const lines = content.split("\n").filter(Boolean);
+			if (lines.length > MAX_HISTORY_SIZE) {
+				fs.writeFileSync(historyFile, lines.slice(-MAX_HISTORY_SIZE).join("\n") + "\n", "utf-8");
+			}
+		} catch {
+			// Best effort trimming
+		}
+	} catch {
+		// Best effort persistence
+	}
+}
 
 /**
  * Custom editor that handles app-level keybindings for coding-agent.
  */
 export class CustomEditor extends Editor {
 	private keybindings: KeybindingsManager;
+	private readonly historyFile: string | undefined;
 	public actionHandlers: Map<AppKeybinding, () => void> = new Map();
 
 	// Special handlers that can be dynamically replaced
@@ -15,9 +54,24 @@ export class CustomEditor extends Editor {
 	/** Handler for extension-registered shortcuts. Returns true if handled. */
 	public onExtensionShortcut?: (data: string) => boolean;
 
-	constructor(tui: TUI, theme: EditorTheme, keybindings: KeybindingsManager, options?: EditorOptions) {
-		super(tui, theme, options);
+	constructor(
+		tui: TUI,
+		theme: EditorTheme,
+		keybindings: KeybindingsManager,
+		options?: EditorOptions & { historyFile?: string },
+	) {
+		const historyFile = options?.historyFile;
+		const initialHistory = historyFile ? loadHistoryFromFile(historyFile) : undefined;
+		super(tui, theme, { ...options, initialHistory });
 		this.keybindings = keybindings;
+		this.historyFile = historyFile;
+	}
+
+	override addToHistory(text: string): void {
+		super.addToHistory(text);
+		if (this.historyFile) {
+			appendHistoryToFile(this.historyFile, text);
+		}
 	}
 
 	/**

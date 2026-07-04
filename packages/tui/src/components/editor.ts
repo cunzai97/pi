@@ -226,6 +226,8 @@ export interface EditorTheme {
 export interface EditorOptions {
 	paddingX?: number;
 	autocompleteMaxVisible?: number;
+	/** Pre-populated history entries loaded from a persistent store */
+	initialHistory?: string[];
 }
 
 const SLASH_COMMAND_SELECT_LIST_LAYOUT: SelectListLayoutOptions = {
@@ -332,6 +334,10 @@ export class Editor implements Component, Focusable {
 		this.paddingX = Number.isFinite(paddingX) ? Math.max(0, Math.floor(paddingX)) : 0;
 		const maxVisible = options.autocompleteMaxVisible ?? 5;
 		this.autocompleteMaxVisible = Number.isFinite(maxVisible) ? Math.max(3, Math.min(20, Math.floor(maxVisible))) : 5;
+		// Load initial history entries (most recent first)
+		if (options.initialHistory && options.initialHistory.length > 0) {
+			this.history = [...options.initialHistory];
+		}
 	}
 
 	/** Set of currently valid paste IDs, for marker-aware segmentation. */

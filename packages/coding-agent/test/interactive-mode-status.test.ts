@@ -6,6 +6,7 @@ import { type Component, Container, type Focusable, TUI } from "../../tui/src/tu
 import { VirtualTerminal } from "../../tui/test/virtual-terminal.ts";
 import type { AutocompleteProviderFactory } from "../src/core/extensions/types.ts";
 import type { SourceInfo } from "../src/core/source-info.ts";
+import { AssistantMessageComponent } from "../src/modes/interactive/components/assistant-message.ts";
 import { InteractiveMode } from "../src/modes/interactive/interactive-mode.ts";
 import { initTheme } from "../src/modes/interactive/theme/theme.ts";
 
@@ -116,27 +117,26 @@ describe("InteractiveMode.showStatus", () => {
 	});
 });
 
-describe("InteractiveMode.setToolsExpanded", () => {
-	test("applies expansion state to the active header and chat entries", () => {
-		const header = { setExpanded: vi.fn() };
-		const loadedResourcesChild = { setExpanded: vi.fn() };
-		const chatChild = { setExpanded: vi.fn() };
+describe("InteractiveMode.toggleThinkingExpansion", () => {
+	test("toggles expansion state and propagates to assistant message components", () => {
+		const assistantChild = new AssistantMessageComponent();
+		const setExpandedSpy = vi.spyOn(assistantChild, "setExpanded");
+		const otherChild = { setExpanded: vi.fn() };
 		const fakeThis: any = {
 			toolOutputExpanded: false,
-			customHeader: undefined,
-			builtInHeader: header,
-			loadedResourcesContainer: { children: [loadedResourcesChild] },
-			chatContainer: { children: [chatChild] },
+			loadedResourcesContainer: { children: [] },
+			chatContainer: { children: [assistantChild, otherChild] },
 			ui: { requestRender: vi.fn() },
+			showStatus: vi.fn(),
 		};
 
-		(InteractiveMode as any).prototype.setToolsExpanded.call(fakeThis, true);
+		(InteractiveMode as any).prototype.toggleThinkingExpansion.call(fakeThis);
 
 		expect(fakeThis.toolOutputExpanded).toBe(true);
-		expect(header.setExpanded).toHaveBeenCalledWith(true);
-		expect(loadedResourcesChild.setExpanded).toHaveBeenCalledWith(true);
-		expect(chatChild.setExpanded).toHaveBeenCalledWith(true);
+		expect(setExpandedSpy).toHaveBeenCalledWith(true);
+		expect(otherChild.setExpanded).toHaveBeenCalledWith(true);
 		expect(fakeThis.ui.requestRender).toHaveBeenCalledTimes(1);
+		expect(fakeThis.showStatus).toHaveBeenCalledWith("Thinking: expanded");
 	});
 });
 

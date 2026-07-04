@@ -323,7 +323,7 @@ export class InteractiveMode {
 	// Tool execution tracking: toolCallId -> component
 	private pendingTools = new Map<string, ToolExecutionComponent>();
 
-	// Tool output expansion state
+	// Tool output / thinking expansion state (toggled together by Ctrl+O)
 	private toolOutputExpanded = false;
 
 	// Thinking block visibility state
@@ -424,9 +424,11 @@ export class InteractiveMode {
 		setKeybindings(this.keybindings);
 		const editorPaddingX = this.settingsManager.getEditorPaddingX();
 		const autocompleteMaxVisible = this.settingsManager.getAutocompleteMaxVisible();
+		const historyFile = path.join(getAgentDir(), "prompt_history");
 		this.defaultEditor = new CustomEditor(this.ui, getEditorTheme(), this.keybindings, {
 			paddingX: editorPaddingX,
 			autocompleteMaxVisible,
+			historyFile,
 		});
 		this.editor = this.defaultEditor;
 		this.editorContainer = new Container();
@@ -692,8 +694,8 @@ export class InteractiveMode {
 				hint("app.thinking.cycle", "to cycle thinking level"),
 				rawKeyHint(`${keyText("app.model.cycleForward")}/${keyText("app.model.cycleBackward")}`, "to cycle models"),
 				hint("app.model.select", "to select model"),
-				hint("app.tools.expand", "to expand tools"),
-				hint("app.thinking.toggle", "to expand thinking"),
+				hint("app.tools.expand", "to expand thinking"),
+				hint("app.thinking.toggle", "to hide thinking"),
 				hint("app.editor.external", "for external editor"),
 				rawKeyHint("/", "for commands"),
 				rawKeyHint("!", "to run bash"),
@@ -708,12 +710,9 @@ export class InteractiveMode {
 				rawKeyHint(`${keyText("app.clear")}/${keyText("app.exit")}`, "clear/exit"),
 				rawKeyHint("/", "commands"),
 				rawKeyHint("!", "bash"),
-				hint("app.tools.expand", "more"),
+				hint("app.tools.expand", "expand thinking"),
 			].join(theme.fg("muted", " · "));
-			const compactOnboarding = theme.fg(
-				"dim",
-				`Press ${keyText("app.tools.expand")} to show full startup help and loaded resources.`,
-			);
+			const compactOnboarding = theme.fg("dim", `Press ${keyText("app.tools.expand")} to expand thinking.`);
 			const onboarding = theme.fg(
 				"dim",
 				`Pi can explain its own features and look up its docs. Ask it how to use or extend Pi.`,
@@ -1007,7 +1006,7 @@ export class InteractiveMode {
 	}
 
 	private getStartupExpansionState(): boolean {
-		return this.options.verbose || this.toolOutputExpanded;
+		return (this.options.verbose ?? false) || this.toolOutputExpanded;
 	}
 
 	/**
@@ -2106,8 +2105,8 @@ export class InteractiveMode {
 				}
 				return result;
 			},
-			getToolsExpanded: () => this.toolOutputExpanded,
-			setToolsExpanded: (expanded) => this.setToolsExpanded(expanded),
+			getToolsExpanded: () => false,
+			setToolsExpanded: () => {},
 		};
 	}
 
@@ -2144,7 +2143,7 @@ export class InteractiveMode {
 					this.hideExtensionSelector();
 					resolve(undefined);
 				},
-				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleToolOutputExpansion() },
+				{ tui: this.ui, timeout: opts?.timeout, onToggleToolsExpanded: () => this.toggleThinkingExpansion() },
 			);
 
 			this.editorContainer.clear();
@@ -2510,7 +2509,7 @@ export class InteractiveMode {
 		// Global debug handler on TUI (works regardless of focus)
 		this.ui.onDebug = () => this.handleDebugCommand();
 		this.defaultEditor.onAction("app.model.select", () => this.showModelSelector());
-		this.defaultEditor.onAction("app.tools.expand", () => this.toggleToolOutputExpansion());
+		this.defaultEditor.onAction("app.tools.expand", () => this.toggleThinkingExpansion());
 		this.defaultEditor.onAction("app.thinking.toggle", () => this.toggleThinkingBlockVisibility());
 		this.defaultEditor.onAction("app.editor.external", () => this.openExternalEditor());
 		this.defaultEditor.onAction("app.message.followUp", () => this.handleFollowUp());
@@ -2518,6 +2517,7 @@ export class InteractiveMode {
 		this.defaultEditor.onAction("app.session.new", () => this.handleClearCommand());
 		this.defaultEditor.onAction("app.session.tree", () => this.showTreeSelector());
 		this.defaultEditor.onAction("app.session.fork", () => this.showUserMessageSelector());
+		this.defaultEditor.onAction("app.session.undo", () => this.handleUndoCommand());
 		this.defaultEditor.onAction("app.session.resume", () => this.showSessionSelector());
 
 		this.defaultEditor.onChange = (text: string) => {
@@ -2621,6 +2621,11 @@ export class InteractiveMode {
 			if (text === "/fork") {
 				this.showUserMessageSelector();
 				this.editor.setText("");
+				return;
+			}
+			if (text === "/undo") {
+				this.editor.setText("");
+				await this.handleUndoCommand();
 				return;
 			}
 			if (text === "/clone") {
@@ -3633,7 +3638,7 @@ export class InteractiveMode {
 		}
 	}
 
-	private toggleToolOutputExpansion(): void {
+	private toggleThinkingExpansion(): void {
 		this.setToolsExpanded(!this.toolOutputExpanded);
 	}
 
@@ -3645,12 +3650,15 @@ export class InteractiveMode {
 		}
 		for (const container of [this.loadedResourcesContainer, this.chatContainer]) {
 			for (const child of container.children) {
-				if (isExpandable(child)) {
+				if (child instanceof AssistantMessageComponent) {
+					child.setExpanded(expanded);
+				} else if (isExpandable(child)) {
 					child.setExpanded(expanded);
 				}
 			}
 		}
 		this.ui.requestRender();
+		this.showStatus(`Thinking: ${expanded ? "expanded" : "collapsed"}`);
 	}
 
 	private toggleThinkingBlockVisibility(): void {
@@ -4469,6 +4477,37 @@ export class InteractiveMode {
 
 			this.editor.setText("");
 			this.showStatus("Cloned to new session");
+		} catch (error: unknown) {
+			this.showError(error instanceof Error ? error.message : String(error));
+		}
+	}
+
+	private async handleUndoCommand(): Promise<void> {
+		if (this.session.isStreaming) {
+			this.showWarning("Cannot undo while agent is running");
+			return;
+		}
+
+		try {
+			const result = await this.session.undo();
+			if (!result) {
+				this.showStatus("Nothing to undo");
+				return;
+			}
+
+			// Restore files
+			if (result.restoredFiles.length > 0) {
+				const fileCount = result.restoredFiles.length;
+				this.showStatus(`Restored ${fileCount} file${fileCount > 1 ? "s" : ""}`);
+			}
+
+			// Clear chat and re-render
+			this.chatContainer.clear();
+			this.renderInitialMessages();
+
+			// Populate editor with previous user message
+			this.editor.setText(result.editorText);
+			this.showStatus("Undone. Edit and resend.");
 		} catch (error: unknown) {
 			this.showError(error instanceof Error ? error.message : String(error));
 		}
@@ -5554,8 +5593,8 @@ export class InteractiveMode {
 | \`${cycleThinkingLevel}\` | Cycle thinking level |
 | \`${cycleModelForward}\` / \`${cycleModelBackward}\` | Cycle models |
 | \`${selectModel}\` | Open model selector |
-| \`${expandTools}\` | Toggle tool output expansion |
-| \`${toggleThinking}\` | Toggle thinking block visibility |
+| \`${expandTools}\` | Toggle thinking expansion |
+| \`${toggleThinking}\` | Hide/show thinking blocks |
 | \`${externalEditor}\` | Edit message in external editor |
 | \`${followUp}\` | Queue follow-up message |
 | \`${dequeue}\` | Restore queued messages |

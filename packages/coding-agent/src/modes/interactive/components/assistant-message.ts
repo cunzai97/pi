@@ -1,10 +1,74 @@
 import type { AssistantMessage } from "@earendil-works/pi-ai";
-import { Container, Markdown, type MarkdownTheme, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+	Container,
+	Markdown,
+	type MarkdownTheme,
+	Spacer,
+	Text,
+	truncateToWidth,
+	visibleWidth,
+} from "@earendil-works/pi-tui";
 import { getMarkdownTheme, theme } from "../theme/theme.ts";
+import { keyHint } from "./keybinding-hints.ts";
 
 const OSC133_ZONE_START = "\x1b]133;A\x07";
 const OSC133_ZONE_END = "\x1b]133;B\x07";
 const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
+
+/**
+ * Renders thinking text truncated to a single visual line with an expand hint.
+ * Uses Text (not Markdown) to avoid multi-line wrapping.
+ */
+class CollapsedThinking {
+	private text: string;
+	private outputPad: number;
+
+	constructor(text: string, outputPad: number) {
+		this.text = text;
+		this.outputPad = outputPad;
+	}
+
+	invalidate(): void {
+		// No cached state to clear
+	}
+
+	render(width: number): string[] {
+		// Get first visual line (Text wraps at terminal width)
+		const tempText = new Text(this.text, 0, 0);
+		const visualLines = tempText.render(width);
+		const firstLine = visualLines[0] ?? "";
+
+		// Reserve space for the expand suffix
+		const suffix = theme.fg("dim", ` ${keyHint("app.tools.expand", "to expand")}`);
+		const suffixLen = visibleWidth(suffix);
+		const contentWidth = Math.max(1, width - this.outputPad * 2 - suffixLen);
+		const truncated = visibleTruncate(firstLine, contentWidth);
+
+		// Build single line: thinking + suffix, all styled
+		const line = theme.italic(theme.fg("thinkingText", truncated + suffix));
+		// Use Text with padding to render it (handles padding and width correctly)
+		const renderText = new Text(line, this.outputPad, 0);
+		const rendered = renderText.render(width);
+		if (rendered.length === 0) {
+			return [" ".repeat(width)];
+		}
+		// Safety: if wrapping produced multiple lines, collapse to one
+		if (rendered.length > 1) {
+			return [truncateToWidth(rendered[0], width, "")];
+		}
+		return [truncateToWidth(rendered[0], width, "")];
+	}
+}
+
+function visibleTruncate(text: string, maxVisibleWidth: number): string {
+	if (visibleWidth(text) <= maxVisibleWidth) return text;
+	const ellipsis = "…";
+	let truncated = text;
+	while (visibleWidth(truncated) > maxVisibleWidth && truncated.length > 0) {
+		truncated = truncated.slice(0, -1);
+	}
+	return truncated + ellipsis;
+}
 
 /**
  * Component that renders a complete assistant message
@@ -12,6 +76,7 @@ const OSC133_ZONE_FINAL = "\x1b]133;C\x07";
 export class AssistantMessageComponent extends Container {
 	private contentContainer: Container;
 	private hideThinkingBlock: boolean;
+	private expanded = false;
 	private markdownTheme: MarkdownTheme;
 	private hiddenThinkingLabel: string;
 	private outputPad: number;
@@ -43,6 +108,13 @@ export class AssistantMessageComponent extends Container {
 
 	override invalidate(): void {
 		super.invalidate();
+		if (this.lastMessage) {
+			this.updateContent(this.lastMessage);
+		}
+	}
+
+	setExpanded(expanded: boolean): void {
+		this.expanded = expanded;
 		if (this.lastMessage) {
 			this.updateContent(this.lastMessage);
 		}
@@ -116,7 +188,7 @@ export class AssistantMessageComponent extends Container {
 					if (hasVisibleContentAfter) {
 						this.contentContainer.addChild(new Spacer(1));
 					}
-				} else {
+				} else if (this.expanded) {
 					// Thinking traces in thinkingText color, italic
 					this.contentContainer.addChild(
 						new Markdown(content.thinking.trim(), this.outputPad, 0, this.markdownTheme, {
@@ -124,6 +196,12 @@ export class AssistantMessageComponent extends Container {
 							italic: true,
 						}),
 					);
+					if (hasVisibleContentAfter) {
+						this.contentContainer.addChild(new Spacer(1));
+					}
+				} else {
+					// Collapsed: show only one visual line of thinking plus an expand hint
+					this.contentContainer.addChild(new CollapsedThinking(content.thinking.trim(), this.outputPad));
 					if (hasVisibleContentAfter) {
 						this.contentContainer.addChild(new Spacer(1));
 					}

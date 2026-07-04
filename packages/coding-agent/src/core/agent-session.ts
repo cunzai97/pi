@@ -14,6 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
 import { basename, dirname } from "node:path";
 import type {
 	Agent,
@@ -299,6 +300,9 @@ export class AgentSession {
 	private _bashAbortController: AbortController | undefined = undefined;
 	private _pendingBashMessages: BashExecutionMessage[] = [];
 
+	// Undo state: tracks file snapshots per turn for /undo
+	private _fileSnapshots: Map<string, string> = new Map(); // path -> content before modification
+
 	// Extension system
 	private _extensionRunner!: ExtensionRunner;
 	private _turnIndex = 0;
@@ -418,6 +422,9 @@ export class AgentSession {
 	 */
 	private _installAgentToolHooks(): void {
 		this.agent.beforeToolCall = async ({ toolCall, args }) => {
+			// Snapshot files before edit/write tools modify them (for /undo)
+			this._snapshotFileBeforeTool(toolCall.name, args);
+
 			const runner = this._extensionRunner;
 			if (!runner.hasHandlers("tool_call")) {
 				return undefined;
@@ -487,6 +494,74 @@ export class AgentSession {
 				thinkingLevel: this.agent.state.thinkingLevel,
 			};
 		};
+	}
+
+	// =========================================================================
+	// File Snapshotting (for /undo)
+	// =========================================================================
+
+	/**
+	 * Snapshot file contents before a tool modifies them.
+	 * Only tracks edit and write tools.
+	 */
+	private _snapshotFileBeforeTool(toolName: string, args: unknown): void {
+		if (toolName !== "edit" && toolName !== "write") return;
+		if (!this._cwd) return;
+
+		const argsObj = args as Record<string, unknown> | undefined;
+		if (!argsObj || typeof argsObj !== "object") return;
+
+		const pathValue = argsObj.path;
+		if (typeof pathValue !== "string") return;
+
+		const filePath = resolvePath(pathValue, this._cwd);
+
+		// Only snapshot if file exists (for edit) or doesn't exist yet (for write, skip)
+		if (toolName === "edit" && existsSync(filePath)) {
+			try {
+				this._fileSnapshots.set(filePath, readFileSync(filePath, "utf-8"));
+			} catch {
+				// Ignore read errors
+			}
+		} else if (toolName === "write" && existsSync(filePath)) {
+			// For write, also snapshot if file exists (overwrite case)
+			try {
+				this._fileSnapshots.set(filePath, readFileSync(filePath, "utf-8"));
+			} catch {
+				// Ignore read errors
+			}
+		}
+	}
+
+	/**
+	 * Restore files from snapshots (for /undo).
+	 * Returns list of restored file paths.
+	 */
+	private async _restoreFileSnapshots(): Promise<string[]> {
+		const restored: string[] = [];
+		for (const [filePath, content] of this._fileSnapshots) {
+			try {
+				await writeFile(filePath, content, "utf-8");
+				restored.push(filePath);
+			} catch {
+				// Ignore write errors
+			}
+		}
+		return restored;
+	}
+
+	/**
+	 * Clear file snapshots after they've been used or the turn completes.
+	 */
+	private _clearFileSnapshots(): void {
+		this._fileSnapshots.clear();
+	}
+
+	/**
+	 * Public method to clear file snapshots (called when session is forked/switched).
+	 */
+	clearFileSnapshots(): void {
+		this._clearFileSnapshots();
 	}
 
 	// =========================================================================
@@ -660,6 +735,8 @@ export class AgentSession {
 			};
 			await this._extensionRunner.emit(extensionEvent);
 			this._turnIndex++;
+			// Clear file snapshots after turn ends (undo only reverts last turn)
+			this._clearFileSnapshots();
 		} else if (event.type === "message_start") {
 			const extensionEvent: MessageStartEvent = {
 				type: "message_start",
@@ -2923,6 +3000,71 @@ export class AgentSession {
 		} finally {
 			this._branchSummaryAbortController = undefined;
 		}
+	}
+
+	/**
+	 * Undo the last user message: restore files modified in the last turn,
+	 * branch to before that message, and return the user message text for re-editing.
+	 *
+	 * Returns the user message text and list of restored files, or null if nothing to undo.
+	 */
+	async undo(): Promise<{ editorText: string; restoredFiles: string[] } | null> {
+		// Find the last user message entry
+		const entries = this.sessionManager.getEntries();
+		let lastUserEntry: Extract<SessionEntry, { type: "message" }> | undefined;
+		for (let i = entries.length - 1; i >= 0; i--) {
+			const entry = entries[i];
+			if (entry.type === "message" && entry.message.role === "user") {
+				lastUserEntry = entry;
+				break;
+			}
+		}
+
+		if (!lastUserEntry) {
+			return null;
+		}
+
+		// Restore files from snapshots
+		const restoredFiles = await this._restoreFileSnapshots();
+		this._clearFileSnapshots();
+
+		// Extract user message text
+		const userMessage = lastUserEntry.message as { content: string | Array<{ type: string; text?: string }> };
+		const editorText = this._extractUserMessageText(userMessage.content);
+		if (!editorText) {
+			return null;
+		}
+
+		// Navigate to before the last user message (like fork but automatic)
+		const targetId = lastUserEntry.id;
+		const oldLeafId = this.sessionManager.getLeafId();
+
+		if (targetId === oldLeafId) {
+			// Already at the user message, just restore files
+			return { editorText, restoredFiles };
+		}
+
+		// Branch to before the user message
+		const newLeafId = lastUserEntry.parentId;
+		if (newLeafId === null) {
+			this.sessionManager.resetLeaf();
+		} else {
+			this.sessionManager.branch(newLeafId);
+		}
+
+		// Update agent state
+		const sessionContext = this.sessionManager.buildSessionContext();
+		this.agent.state.messages = sessionContext.messages;
+
+		// Emit session_tree event for extensions
+		await this._extensionRunner.emit({
+			type: "session_tree",
+			newLeafId: this.sessionManager.getLeafId(),
+			oldLeafId,
+			summaryEntry: undefined,
+		});
+
+		return { editorText, restoredFiles };
 	}
 
 	/**

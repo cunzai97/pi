@@ -29,6 +29,7 @@ export interface AppKeybindings {
 	"app.session.new": true;
 	"app.session.tree": true;
 	"app.session.fork": true;
+	"app.session.undo": true;
 	"app.session.resume": true;
 	"app.tree.foldOrUp": true;
 	"app.tree.unfoldOrDown": true;
@@ -82,7 +83,7 @@ export const KEYBINDINGS = {
 		description: "Cycle to previous model",
 	},
 	"app.model.select": { defaultKeys: "ctrl+l", description: "Open model selector" },
-	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle tool output" },
+	"app.tools.expand": { defaultKeys: "ctrl+o", description: "Toggle thinking" },
 	"app.thinking.toggle": {
 		defaultKeys: "ctrl+t",
 		description: "Toggle thinking blocks",
@@ -110,6 +111,7 @@ export const KEYBINDINGS = {
 	"app.session.new": { defaultKeys: [], description: "Start a new session" },
 	"app.session.tree": { defaultKeys: [], description: "Open session tree" },
 	"app.session.fork": { defaultKeys: [], description: "Fork current session" },
+	"app.session.undo": { defaultKeys: [], description: "Undo last message and restore files" },
 	"app.session.resume": { defaultKeys: [], description: "Resume a session" },
 	"app.tree.foldOrUp": {
 		defaultKeys: ["ctrl+left", "alt+left"],
@@ -251,6 +253,7 @@ const KEYBINDING_NAME_MIGRATIONS = {
 	newSession: "app.session.new",
 	tree: "app.session.tree",
 	fork: "app.session.fork",
+	sessionUndo: "app.session.undo",
 	resume: "app.session.resume",
 	treeFoldOrUp: "app.tree.foldOrUp",
 	treeUnfoldOrDown: "app.tree.unfoldOrDown",
