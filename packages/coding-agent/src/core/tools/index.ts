@@ -1,4 +1,11 @@
 export {
+	type AskChoice,
+	type AskQuestion,
+	type AskToolInput,
+	createAskTool,
+	createAskToolDefinition,
+} from "./ask.ts";
+export {
 	type BashOperations,
 	type BashSpawnContext,
 	type BashSpawnHook,
@@ -76,6 +83,7 @@ export {
 
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { ToolDefinition } from "../extensions/types.ts";
+import { createAskTool, createAskToolDefinition } from "./ask.ts";
 import { type BashToolOptions, createBashTool, createBashToolDefinition } from "./bash.ts";
 import { createEditTool, createEditToolDefinition, type EditToolOptions } from "./edit.ts";
 import { createFindTool, createFindToolDefinition, type FindToolOptions } from "./find.ts";
@@ -87,8 +95,18 @@ import { createWriteTool, createWriteToolDefinition, type WriteToolOptions } fro
 
 export type Tool = AgentTool<any>;
 export type ToolDef = ToolDefinition<any, any>;
-export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls" | "todo";
-export const allToolNames: Set<ToolName> = new Set(["read", "bash", "edit", "write", "grep", "find", "ls", "todo"]);
+export type ToolName = "read" | "bash" | "edit" | "write" | "grep" | "find" | "ls" | "todo" | "ask";
+export const allToolNames: Set<ToolName> = new Set([
+	"read",
+	"bash",
+	"edit",
+	"write",
+	"grep",
+	"find",
+	"ls",
+	"todo",
+	"ask",
+]);
 
 export interface ToolsOptions {
 	read?: ReadToolOptions;
@@ -99,6 +117,7 @@ export interface ToolsOptions {
 	find?: FindToolOptions;
 	ls?: LsToolOptions;
 	todo?: Record<string, unknown>;
+	ask?: Record<string, unknown>;
 }
 
 export function createToolDefinition(toolName: ToolName, cwd: string, options?: ToolsOptions): ToolDef {
@@ -119,6 +138,8 @@ export function createToolDefinition(toolName: ToolName, cwd: string, options?: 
 			return createLsToolDefinition(cwd, options?.ls);
 		case "todo":
 			return createTodoToolDefinition(cwd, options?.todo);
+		case "ask":
+			return createAskToolDefinition(cwd, options?.ask);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -142,6 +163,8 @@ export function createTool(toolName: ToolName, cwd: string, options?: ToolsOptio
 			return createLsTool(cwd, options?.ls);
 		case "todo":
 			return createTodoTool(cwd, options?.todo);
+		case "ask":
+			return createAskTool(cwd, options?.ask);
 		default:
 			throw new Error(`Unknown tool name: ${toolName}`);
 	}
@@ -175,6 +198,7 @@ export function createAllToolDefinitions(cwd: string, options?: ToolsOptions): R
 		find: createFindToolDefinition(cwd, options?.find),
 		ls: createLsToolDefinition(cwd, options?.ls),
 		todo: createTodoToolDefinition(cwd, options?.todo),
+		ask: createAskToolDefinition(cwd, options?.ask),
 	};
 }
 
@@ -206,5 +230,6 @@ export function createAllTools(cwd: string, options?: ToolsOptions): Record<Tool
 		find: createFindTool(cwd, options?.find),
 		ls: createLsTool(cwd, options?.ls),
 		todo: createTodoTool(cwd, options?.todo),
+		ask: createAskTool(cwd, options?.ask),
 	};
 }
