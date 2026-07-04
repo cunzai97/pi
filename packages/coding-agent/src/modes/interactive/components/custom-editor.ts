@@ -12,8 +12,18 @@ function loadHistoryFromFile(historyFile: string): string[] {
 			.split("\n")
 			.map((l) => l.trim())
 			.filter(Boolean);
+		const entries: string[] = [];
+		for (const line of lines) {
+			try {
+				const parsed = JSON.parse(line);
+				if (typeof parsed === "string") entries.push(parsed);
+			} catch {
+				// Fallback: treat as plain text line (legacy format)
+				entries.push(line);
+			}
+		}
 		// File stores oldest first; editor expects newest first
-		return lines.reverse().slice(0, MAX_HISTORY_SIZE);
+		return entries.reverse().slice(0, MAX_HISTORY_SIZE);
 	} catch {
 		return [];
 	}
@@ -23,7 +33,9 @@ function appendHistoryToFile(historyFile: string, text: string): void {
 	try {
 		const dir = path.dirname(historyFile);
 		if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-		fs.appendFileSync(historyFile, text + "\n", "utf-8");
+		// JSONL format: one JSON string per line, handles multi-line content
+		const jsonLine = JSON.stringify(text) + "\n";
+		fs.appendFileSync(historyFile, jsonLine, "utf-8");
 		// Trim file if it grows too large
 		try {
 			const content = fs.readFileSync(historyFile, "utf-8");
