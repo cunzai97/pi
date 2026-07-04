@@ -10,7 +10,7 @@ function loadHistoryFromFile(historyFile: string): string[] {
 		const content = fs.readFileSync(historyFile, "utf-8");
 		const lines = content
 			.split("\n")
-			.map((l) => l.trim())
+			.map((l) => l.trimEnd())
 			.filter(Boolean);
 		const entries: string[] = [];
 		for (const line of lines) {
